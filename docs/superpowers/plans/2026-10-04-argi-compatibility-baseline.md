@@ -32,6 +32,58 @@ Java 17.
 - Keep Core independently buildable without Extensions.
 - Use Apache 2.0 headers and signed-off commits.
 
+## Execution Record
+
+Execution mode: inline, in the isolated `codex/argi-compatibility-baseline`
+worktree. Runtime Java code and production dependencies remain unchanged.
+
+- Tasks 1-4 implementation and focused verification: complete.
+- Task 5 acceptance verification: complete. Implementation changes are
+  consolidated into one signed-off commit rather than four intermediate
+  commits; the branch and worktree are kept local, without push or PR.
+
+Plan adjustments made during implementation:
+
+- Commit Tasks 1-4 atomically after acceptance verification. The final wiring
+  checker references all four tasks, so intermediate commits would contain a
+  gate that fails solely because later files are absent.
+- Run binary and source gates sequentially through recursive Make, even under
+  `make -j`, because they share candidate output directories and Maven state.
+- Clean only candidate runtime modules before the binary build to prevent
+  stale classes from hiding API removals. Cleaning the parent would remove
+  the isolated Maven repository under `target/binary-compatibility/`.
+- Use one fresh pinned Extensions checkout and one fresh Maven repository for
+  the complete Extensions acceptance run. Its Core `clean install` includes
+  the default full Core test suite, avoiding redundant reactor runs.
+
+Acceptance evidence:
+
+- All four wiring changes were observed failing before their corresponding
+  implementation, then passing afterwards.
+- `make compatibility-check`: five japicmp artifact comparisons and the ARGI
+  source consumer passed (`/tmp/argi-full-compatibility.log`).
+- Negative API probe: removing `NodeOutput.class` from a temporary copy of the
+  candidate graph JAR caused japicmp to exit 1 with `CLASS_REMOVED`, using the
+  gate's flags. No tracked source or candidate artifact was changed.
+- Invalid Extensions checkout: verifier exited 2 before starting Maven.
+- Missing-file regression probe in an isolated archived repository: before
+  the final correction, deleting the policy and workflow incorrectly passed
+  wiring verification. Explicit existence assertions now make the probe exit
+  1 with both missing paths; restoring both files makes it pass again.
+- Core isolated `clean install`: all seven reactor modules passed, with 1278
+  tests reported, 0 failures, 0 errors, and 219 skips from existing test
+  configuration (`/tmp/argi-extensions-compatibility.log`).
+- Pinned Extensions `clean test`: all 73 reactor modules passed, with 399
+  tests reported, 0 failures, 0 errors, and 27 skips. The existing
+  `rag/argi-rag/pom.xml` separately sets `skipTests=true`; its integration
+  tests were compiled but not run. Default test configuration was preserved,
+  so passing this gate does not prove those excluded scenarios.
+- Verification ran with JDK 17.0.3 and Maven Wrapper 3.9.16. The verifier
+  removed its fresh temporary Maven repository on successful exit.
+- `make lint`, `make licenses-check`, `make yaml-lint`, policy Markdown lint,
+  Bash syntax checks, structured workflow validation, and `git diff --check`
+  passed. License scan found 0 invalid files across 1297 files.
+
 ---
 
 ### Task 1: Restore Make and source-compatibility wiring
@@ -48,7 +100,7 @@ Java 17.
 - Produces: `make compatibility-wiring-check` and an executable
   `make compatibility-check` entry point used by CI and later tasks.
 
-- [ ] **Step 1: Write the failing wiring check**
+- [x] **Step 1: Write the failing wiring check**
 
 Create `tools/scripts/verify-compatibility-wiring.sh` with this initial content:
 
@@ -129,7 +181,7 @@ Make the file executable:
 chmod +x tools/scripts/verify-compatibility-wiring.sh
 ```
 
-- [ ] **Step 2: Run the check and verify RED**
+- [x] **Step 2: Run the check and verify RED**
 
 Run:
 
@@ -140,7 +192,7 @@ tools/scripts/verify-compatibility-wiring.sh
 Expected: exit `1`, reporting that `tools/make/java.mk` does not invoke the
 binary and source scripts and still contains both skip messages.
 
-- [ ] **Step 3: Restore the Make targets**
+- [x] **Step 3: Restore the Make targets**
 
 Replace the compatibility section in `tools/make/java.mk` with:
 
@@ -168,7 +220,7 @@ compatibility-check: compatibility-wiring-check binary-compatibility-check sourc
 
 <!-- markdownlint-enable MD010 MD013 -->
 
-- [ ] **Step 4: Run the focused GREEN checks**
+- [x] **Step 4: Run the focused GREEN checks**
 
 Run:
 
@@ -181,7 +233,7 @@ make source-compatibility-check
 Expected: all commands exit `0`; the source fixture compiles against candidate
 ARGI artifacts.
 
-- [ ] **Step 5: Commit the wiring restoration**
+- [x] **Step 5: Commit the wiring restoration (consolidated atomic commit)**
 
 ```bash
 git add tools/make/java.mk \
@@ -202,7 +254,7 @@ git commit -s -m "ci: restore ARGI compatibility commands"
 - Consumes: Task 1 wiring and the fixed Core commit.
 - Produces: a five-artifact japicmp gate with no public-type exclusions.
 
-- [ ] **Step 1: Extend the wiring check before changing the binary gate**
+- [x] **Step 1: Extend the wiring check before changing the binary gate**
 
 Insert these assertions before the final `if` block in
 `tools/scripts/verify-compatibility-wiring.sh`:
@@ -216,7 +268,7 @@ reject_literal "tools/scripts/verify-core-binary-compatibility.sh" \
   "japicmp_args+=(--exclude"
 ```
 
-- [ ] **Step 2: Run the check and verify RED**
+- [x] **Step 2: Run the check and verify RED**
 
 Run:
 
@@ -226,7 +278,7 @@ tools/scripts/verify-compatibility-wiring.sh
 
 Expected: exit `1`, reporting the old baseline and public-type exclusions.
 
-- [ ] **Step 3: Change the binary baseline and remove exclusions**
+- [x] **Step 3: Change the binary baseline and remove exclusions**
 
 In `tools/scripts/verify-core-binary-compatibility.sh`:
 
@@ -239,7 +291,7 @@ only `label`, `baseline_jar`, and `candidate_jar`; remove the `excludes`
 variable and the conditional `--exclude` argument. Invoke the built-in nodes
 comparison with only the two JAR paths.
 
-- [ ] **Step 4: Run the binary gate and complete compatibility gate**
+- [x] **Step 4: Run the binary gate and complete compatibility gate**
 
 Run:
 
@@ -252,7 +304,7 @@ make compatibility-check
 Expected: exit `0`; five japicmp reports are generated under
 `target/binary-compatibility/`, and the source fixture also compiles.
 
-- [ ] **Step 5: Commit the binary baseline**
+- [x] **Step 5: Commit the binary baseline (consolidated atomic commit)**
 
 ```bash
 git add tools/scripts/verify-compatibility-wiring.sh \
@@ -274,7 +326,7 @@ git commit -s -m "ci: enforce the ARGI binary baseline"
 - Produces: `verify-extensions-compatibility.sh <checkout>` with isolated Maven
   repository semantics.
 
-- [ ] **Step 1: Add failing verifier assertions**
+- [x] **Step 1: Add failing verifier assertions**
 
 Insert these assertions before the final `if` block in the wiring check:
 
@@ -286,7 +338,7 @@ require_literal "tools/scripts/verify-extensions-compatibility.sh" \
   'clean test'
 ```
 
-- [ ] **Step 2: Run the check and verify RED**
+- [x] **Step 2: Run the check and verify RED**
 
 Run:
 
@@ -297,7 +349,7 @@ tools/scripts/verify-compatibility-wiring.sh
 Expected: exit `1` with `missing file:
 tools/scripts/verify-extensions-compatibility.sh`.
 
-- [ ] **Step 3: Restore the verifier with an Apache header**
+- [x] **Step 3: Restore the verifier with an Apache header**
 
 Create `tools/scripts/verify-extensions-compatibility.sh` with this execution
 contract:
@@ -341,7 +393,7 @@ echo "Testing Extensions from ${extensions_dir}"
 Add the standard Apache 2.0 shell header above this block and make the file
 executable.
 
-- [ ] **Step 4: Run syntax and isolated reactor verification**
+- [x] **Step 4: Run syntax and isolated reactor verification**
 
 ```bash
 bash -n tools/scripts/verify-extensions-compatibility.sh
@@ -370,7 +422,7 @@ tools/scripts/verify-extensions-compatibility.sh \
 Expected: Bash syntax, wiring, Core reactor, and pinned Extensions reactor all
 exit `0`; the trap removes only the validated temporary checkout.
 
-- [ ] **Step 5: Commit the Extensions verifier**
+- [x] **Step 5: Commit the Extensions verifier (consolidated atomic commit)**
 
 ```bash
 git add tools/scripts/verify-compatibility-wiring.sh \
@@ -392,7 +444,7 @@ git commit -s -m "ci: restore Extensions compatibility verification"
 - Consumes: Tasks 1-3 commands and pinned SHAs.
 - Produces: blocking `api-compatibility` and `extensions-compatibility` jobs.
 
-- [ ] **Step 1: Add failing workflow and policy assertions**
+- [x] **Step 1: Add failing workflow and policy assertions**
 
 Insert these assertions before the final `if` block in the wiring check:
 
@@ -411,7 +463,7 @@ require_literal "docs/compatibility-policy.md" \
   "ec023a24910a0a30c0e3e1c810e4c3ac2ef0dc40"
 ```
 
-- [ ] **Step 2: Run the check and verify RED**
+- [x] **Step 2: Run the check and verify RED**
 
 Run:
 
@@ -422,7 +474,7 @@ tools/scripts/verify-compatibility-wiring.sh
 Expected: exit `1` listing both missing jobs, the missing build dependencies,
 and both missing policy SHAs.
 
-- [ ] **Step 3: Add the API compatibility job**
+- [x] **Step 3: Add the API compatibility job**
 
 Add after `jdk-compatibility` in `.github/workflows/build-and-test.yml`:
 
@@ -438,7 +490,7 @@ Add after `jdk-compatibility` in `.github/workflows/build-and-test.yml`:
       - run: make compatibility-check
 ```
 
-- [ ] **Step 4: Add the pinned Extensions compatibility job**
+- [x] **Step 4: Add the pinned Extensions compatibility job**
 
 Add immediately after `api-compatibility`:
 
@@ -463,7 +515,7 @@ Change the `build` dependency line to:
     needs: [format, check-style, test, jdk-compatibility, api-compatibility, extensions-compatibility]
 ```
 
-- [ ] **Step 5: Align the policy with the executable contract**
+- [x] **Step 5: Align the policy with the executable contract**
 
 Add a migration-boundary section near the top of
 `docs/compatibility-policy.md`:
@@ -484,7 +536,7 @@ commit `ec023a24910a0a30c0e3e1c810e4c3ac2ef0dc40`.
 Keep the existing protected-surface and deprecation rules unchanged; they apply
 after this baseline.
 
-- [ ] **Step 6: Run workflow and policy GREEN checks**
+- [x] **Step 6: Run workflow and policy GREEN checks**
 
 ```bash
 tools/scripts/verify-compatibility-wiring.sh
@@ -494,7 +546,7 @@ git diff --check
 
 Expected: all commands exit `0`.
 
-- [ ] **Step 7: Commit CI and policy wiring**
+- [x] **Step 7: Commit CI and policy wiring (consolidated atomic commit)**
 
 ```bash
 git add .github/workflows/build-and-test.yml \
@@ -514,7 +566,7 @@ git commit -s -m "ci: gate ARGI against Core and Extensions baselines"
 - Consumes: all commands and CI contracts from Tasks 1-4.
 - Produces: completion evidence for the first remediation batch.
 
-- [ ] **Step 1: Verify tracked scope and signed commits**
+- [x] **Step 1: Verify tracked scope and signed commits**
 
 ```bash
 git status --short
@@ -525,7 +577,7 @@ git log --format='%h %s%n%(trailers:key=Signed-off-by,valueonly)' \
 Expected: no unexpected tracked files and every implementation commit has a
 `Signed-off-by` trailer.
 
-- [ ] **Step 2: Run local compatibility gates**
+- [x] **Step 2: Run local compatibility gates**
 
 ```bash
 tools/scripts/verify-compatibility-wiring.sh
@@ -534,9 +586,11 @@ make compatibility-check
 
 Expected: wiring, binary comparison, and source fixture all pass.
 
-- [ ] **Step 3: Re-run pinned Extensions verification**
+- [x] **Step 3: Run pinned Extensions acceptance verification**
 
-Use a fresh checkout so the final evidence does not reuse Task 3 state:
+Use a fresh pinned checkout and isolated repository for the acceptance run.
+The execution record documents why the Task 3 and acceptance runs were
+combined:
 
 ```bash
 tmp_parent="${TMPDIR:-/tmp}"
@@ -563,7 +617,7 @@ tools/scripts/verify-extensions-compatibility.sh \
 Expected: Core and Extensions reactors pass from a clean isolated Maven
 repository.
 
-- [ ] **Step 4: Run repository quality gates**
+- [x] **Step 4: Run repository quality gates**
 
 ```bash
 ./mvnw -B test
@@ -574,12 +628,12 @@ git diff --check origin/main...HEAD
 
 Expected: all commands exit `0`.
 
-- [ ] **Step 5: Record the final state**
+- [x] **Step 5: Record the final state**
 
 ```bash
 git status --short --branch
 git log --oneline --decorate origin/main..HEAD
 ```
 
-Expected: the branch is clean and contains the design plus four signed-off
-implementation commits.
+Expected: the branch is clean and contains the design, plan, and one signed-off
+atomic implementation commit, as documented in the execution record.
